@@ -1,12 +1,12 @@
-# Bots de Discord
+# Bots para o Discord
 
-Este é um proeto que enviarei bots para discord para usus atuais ou futuros usos.
+Este é um projeto que armazenarei bots para o discord de uso atual ou futuro.
 
 ### 📋 Documentação
 [Discord - DOCS](https://discord.com/developers/docs/intro)
 
 ### 📌 On Air
-[Discord - Deploy]()
+Discord - Deploy - *Em análise*
 
 ## 🚀 Começando
 
