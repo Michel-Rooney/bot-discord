@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 
 import discord
@@ -14,7 +13,6 @@ BOT = commands.Bot(command_prefix='?', intents=INTENTS)
 
 CHANNEL = int(config('CHANNEL', 0))
 URL = config('URL', '')
-FILENAME = config('FILENAME', '')
 LOOP_TIME = int(config('LOOP_TIME', 30))
 
 tempo_ultima_noticia = ''
@@ -80,5 +78,4 @@ async def concursos_brasil():
     await channel.send(embed=embed)
 
 
-BOT.run(TOKEN)
 BOT.run(TOKEN)
