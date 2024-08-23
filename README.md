@@ -57,7 +57,7 @@ source venv/bin/activate
 venv/Scripts/activate
 
 # Quando ativo, irar aparecer (venv) no inicio
-(venv) user@maquina ~/bit-discord$
+(venv) user@maquina ~/bot-discord$
 ```
 
 **Note:** Para desativar rode o comando
@@ -71,7 +71,15 @@ deactivate
 pip install -r requirements.txt
 ```
 
-6. Inicie o projeto:
+6. Copie o arquivo .env-example para .env:
+
+```
+cp .env-example .env
+
+# No arquivo .env substitua os CHANGE-ME
+```
+
+7. Inicie o projeto:
 
 ```
 python (nome-do-arquivo).py
@@ -80,7 +88,7 @@ python (nome-do-arquivo).py
 ## 🛠️ Construído com
 
 * [Python](https://www.python.org/) - Linguagem
-* [Django](https://discord.com/developers/docs/intro) - Api do Discord
+* [Discord](https://discord.com/developers/docs/intro) - Api do Discord
 * [Strava](https://developers.strava.com/) - Api do Strava
 
 ## ✒️ Autores
