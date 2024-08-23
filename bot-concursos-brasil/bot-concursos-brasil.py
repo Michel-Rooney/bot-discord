@@ -13,10 +13,11 @@ INTENTS = discord.Intents.default()
 BOT = commands.Bot(command_prefix='?', intents=INTENTS)
 
 CHANNEL = int(config('CHANNEL', 0))
-
 URL = config('URL', '')
-
 FILENAME = config('FILENAME', '')
+LOOP_TIME = int(config('LOOP_TIME', 30))
+
+tempo_ultima_noticia = ''
 
 
 @BOT.event
@@ -25,8 +26,9 @@ async def on_ready():
     concursos_brasil.start()
 
 
-@tasks.loop(minutes=1)
+@tasks.loop(minutes=LOOP_TIME)
 async def concursos_brasil():
+    global tempo_ultima_noticia
     GUILD = BOT.get_guild(int(config('GUILD_ID', 0)))
     channel = GUILD.get_channel(CHANNEL)
     response = requests.get(URL)
@@ -34,12 +36,10 @@ async def concursos_brasil():
 
     concursos_recentes = soup.select_one('.recentes-container')
     description = []
-    noticias_time_formatado = datetime.now()
 
-    if os.path.exists(FILENAME) and os.path.getsize(FILENAME) > 0:
-        with open(FILENAME, 'r') as file:
-            ultima_noticias_time = file.read().strip()
-            noticias_time_formatado = datetime.strptime(ultima_noticias_time, "%d/%m/%Y às %Hh%M")  # noqa: E501
+    if not tempo_ultima_noticia:
+        tempo_ultima_noticia = datetime.strptime('17:00', '%H:%M')
+        print(tempo_ultima_noticia)
 
     for article in concursos_recentes.children:
         link = article.select_one('a')['href']
@@ -50,15 +50,14 @@ async def concursos_brasil():
 
         tempo_article = datetime.strptime(tempo, "%d/%m/%Y às %Hh%M")  # noqa: E501
 
-        if tempo_article < noticias_time_formatado:
+        if tempo_article < tempo_ultima_noticia:
             continue
 
         description.append(
             f"## [{localidade} - {titulo}]({link})\n{tempo} por {author}"
         )
 
-    with open(FILENAME, 'w') as file:
-        file.write(datetime.now().strftime('%d/%m/%Y às %Hh%M'))
+    tempo_ultima_noticia = datetime.now()
 
     time = datetime.now().strftime('%Y-%m-%d %H:%M')
 
@@ -67,7 +66,8 @@ async def concursos_brasil():
         return
 
     embed = discord.Embed(
-        title=f'📢 Concursos Brasil - Notícias Recentes" [{time}]',  # noqa: E501        url=URL,
+        title=f'📢 Concursos Brasil - Notícias Recentes" [{time}]',  # noqa: E501
+        url=URL,
         color=discord.Color.green(),
         description="\n".join(description)
     )
