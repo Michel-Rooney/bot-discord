@@ -36,8 +36,7 @@ async def concursos_brasil():
     description = []
 
     if not tempo_ultima_noticia:
-        tempo_ultima_noticia = datetime.strptime('17:00', '%H:%M')
-        print(tempo_ultima_noticia)
+        tempo_ultima_noticia = datetime.strptime('17:00', "%H:%M")
 
     for article in concursos_recentes.children:
         link = article.select_one('a')['href']
@@ -70,12 +69,14 @@ async def concursos_brasil():
         description="\n".join(description)
     )
 
-    embed.set_footer(text="Mensagem enviada pelo bot")
+    teste = GUILD.get_role(847909384876195901)
+
+    embed.set_footer(text=f"Mensagem enviada pelo {teste.mention}")
     embed.set_thumbnail(
         url='https://i.ibb.co/KyTkq14/concursos-brasil.jpg'  # noqa: E501
     )
 
-    await channel.send(embed=embed)
+    await channel.send(teste.mention, embed=embed)
 
 
 BOT.run(TOKEN)
