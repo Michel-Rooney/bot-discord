@@ -1,6 +1,7 @@
 import io
 import sqlite3
 from datetime import datetime, timedelta
+from typing import Literal, Optional
 
 import db
 import discord
@@ -12,9 +13,7 @@ from discord.ext import commands
 TOKEN = config('TOKEN', '')
 
 INTENTS = discord.Intents.all()
-BOT = commands.Bot(command_prefix='!', intents=INTENTS)
-
-XP_POINT = int(config('XP_POINT', 1))
+BOT = commands.Bot(command_prefix='!b3e ', intents=INTENTS)
 
 GUILD_ID = int(config('GUILD_ID', 0))
 CHANNEL_ID = int(config('CHANNEL_ID', 0))
@@ -36,30 +35,33 @@ def convert_time(time):
     return datetime.strptime(time, '%Y-%m-%d %H:%M:%S')
 
 
-def calc_xp(total_time):
+def calc_xp(member, total_time):
     # TODO: Colocar para minutos
+    xp_point = int(config('XP_POINT', 1))
     xp_per_min = int(total_time.total_seconds())
+
+    if member.premium_since is not None:
+        xp_point = xp_point * 1.5
 
     xp = 0
     if xp_per_min > 0:
-        xp = xp_per_min * XP_POINT
+        xp = xp_per_min * xp_point
 
     return xp
 
 
+class MemberConverter(commands.MemberConverter):
+    async def convert(self, ctx, argument):
+        print(ctx)
+        print(argument)
+        return await super().convert(ctx, argument)
+
+
 @BOT.command(name='xp')
-async def xp(ctx, user=None, offset='week'):
+async def xp(ctx, offset: Literal['day', 'week', 'month', 'year'] = 'week', member_user: MemberConverter = ''):
     member = ctx.author
     channel = ctx.channel
 
-    if user is isinstance(user, str):
-        user = int(user.replace('<', '').replace('>', '').replace('@', ''))
-    elif user is None:
-        user = member.id
-    else:
-        user = int(user)
-
-    member_user = ctx.guild.get_member(user)
     user = db.get_user(member_user)
     buffer = criar_grafico(member, user, offset)
     embed, file = criar_embed(member, member_user, buffer, user, offset)
@@ -73,30 +75,56 @@ async def rank(ctx):
     c = conn.cursor()
 
     member = ctx.author
-    user = db.get_user(member)
+    channel = ctx.channel
 
-    query = '''
-        WITH ranked_users AS (
+    users_rank = '''
+        WITH RankedUsers AS (
             SELECT
                 id,
+                discord_id,
                 xp,
-                RANK() OVER (ORDER BY xp ASC) AS rank_position
-            FROM
-                user
+                RANK() OVER (ORDER BY xp DESC) AS position
+            FROM user
         )
-        SELECT
-            id,
-            xp,
-            rank_position
-        FROM
-            ranked_users
-        WHERE
-            id = ?
+        SELECT *
+        FROM RankedUsers
+        LIMIT 5
     '''
 
-    rank = c.execute(query, (user[0],)).fetchone()
+    user_position = user_position_rank(member)
+    users_position = c.execute(users_rank).fetchall()
+
+    rank_users_embed = []
+    for user in users_position:
+        user_discord = ctx.guild.get_member(user[1])
+        user_mention = user[1]
+
+        if user_discord is not None:
+            user_mention = user_discord.mention
+
+        rank_users_embed.append(
+            f'#{user[3]} | {user_mention} - XP: `{int(user[2])}`'
+        )
+
+    user_rank_discord = ctx.guild.get_member(user_position[1])
+    message = (
+        f'**#{user_position[3]} | {user_rank_discord.mention} '
+        f'- XP: `{int(user[2])}`**'
+    )
+    rank_users_embed.append(message)
+
+    embed = discord.Embed(
+        title="📋 Rank do servidor"
+    )
+
+    embed.add_field(
+        name='🎙Top 5 - Voz',
+        value='\n'.join(rank_users_embed),
+        inline=False,
+    )
 
     c.close()
+    await channel.send(member.mention, embed=embed)
 
 
 def total_horas_embed(user):
@@ -147,10 +175,38 @@ def canal_mais_usa(user):
     return canal, horas, minutos
 
 
+def user_position_rank(member):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    user = db.get_user(member)
+
+    user_rank = '''
+        WITH RankedUsers AS (
+            SELECT
+                id,
+                discord_id,
+                xp,
+                RANK() OVER (ORDER BY xp DESC) AS position
+            FROM user
+        )
+        SELECT *
+        FROM RankedUsers
+        WHERE id = ?;
+    '''
+
+    user_position = c.execute(user_rank, (user[0],)).fetchone()
+    c.close()
+
+    return user_position
+
+
 def criar_embed(member, member_user, buffer, user, offset='week'):
     horas, minutos = total_horas_embed(user)
     canal, canal_horas, canal_minutos = canal_mais_usa(user)
     canal_tempo = f'**{canal_horas}h {canal_minutos}min**'
+
+    user_position = user_position_rank(member)
 
     match offset:
         case 'day':
@@ -175,6 +231,12 @@ def criar_embed(member, member_user, buffer, user, offset='week'):
     embed.add_field(
         name='Tempo total de estudos',
         value=f'{horas}h {minutos}min',
+        inline=True
+    )
+
+    embed.add_field(
+        name='Posição no rank',
+        value=f'#{user_position[3]}',
         inline=True
     )
 
@@ -281,7 +343,7 @@ def criar_grafico(member, user, offset='week'):
     return buffer
 
 
-@BOT.event
+@ BOT.event
 async def on_voice_state_update(member, before, after):
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -317,7 +379,7 @@ async def on_voice_state_update(member, before, after):
         end_time = time_now()
         end_time_converted = convert_time(time_now())
         total_time = end_time_converted - start_time
-        xp = calc_xp(total_time)
+        xp = calc_xp(member, total_time)
 
         c.execute('''
             UPDATE study
