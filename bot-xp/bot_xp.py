@@ -1,13 +1,13 @@
 import io
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Literal, Optional
 
 import db
 import discord
 import matplotlib.pyplot as plt
 from dateutil.relativedelta import relativedelta
 from decouple import config
+from discord import app_commands
 from discord.ext import commands
 
 TOKEN = config('TOKEN', '')
@@ -23,59 +23,107 @@ DB = 'db.sqlite3'
 
 @BOT.event
 async def on_ready():
-    print(f'Logged in as {BOT.user}')
     db.migrations()
+    print(f'Logged in as {BOT.user}')
 
 
-def time_now():
-    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+@BOT.command()
+async def sinc(ctx: commands.Context):
+    sincs = await BOT.tree.sync()
+    await ctx.reply(f"{len(sincs)} comandos sicronizados")
 
 
-def convert_time(time):
-    return datetime.strptime(time, '%Y-%m-%d %H:%M:%S')
-
-
-def calc_xp(member, total_time):
-    # TODO: Colocar para minutos
-    xp_point = int(config('XP_POINT', 1))
-    xp_per_min = int(total_time.total_seconds())
-
-    if member.premium_since is not None:
-        xp_point = xp_point * 1.5
-
-    xp = 0
-    if xp_per_min > 0:
-        xp = xp_per_min * xp_point
-
-    return xp
-
-
-class MemberConverter(commands.MemberConverter):
-    async def convert(self, ctx, argument):
-        print(ctx)
-        print(argument)
-        return await super().convert(ctx, argument)
-
-
-@BOT.command(name='xp')
-async def xp(ctx, offset: Literal['day', 'week', 'month', 'year'] = 'week', member_user: MemberConverter = ''):
-    member = ctx.author
-    channel = ctx.channel
-
-    user = db.get_user(member_user)
-    buffer = criar_grafico(member, user, offset)
-    embed, file = criar_embed(member, member_user, buffer, user, offset)
-
-    await channel.send(member.mention, embed=embed, file=file)
-
-
-@BOT.command(name='rank')
-async def rank(ctx):
+@ BOT.event
+async def on_voice_state_update(member: discord.Member, before, after):
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
-    member = ctx.author
-    channel = ctx.channel
+    guild = BOT.get_guild(GUILD_ID)
+
+    if before.channel is None and after.channel is not None:
+        user = db.get_user(member)
+
+        if not user:
+            user = c.execute('''
+                INSERT INTO user (discord_id, guild_id, xp)
+                VALUES (?, ?, ?)
+            ''', (member.id, guild.id, 0))
+
+            conn.commit()
+            user = db.get_user(member)
+
+        c.execute('''
+            INSERT INTO study (
+                user,
+                start_time,
+                channel_id
+            ) VALUES (?, ?, ?)
+        ''', (user[0], time_now(), after.channel.id))
+        conn.commit()
+
+    elif before.channel is not None and after.channel is None:
+        user = db.get_user(member)
+        study = db.get_study_by_user(user[0])
+
+        start_time = convert_time(study[2])
+        end_time = time_now()
+        end_time_converted = convert_time(time_now())
+        total_time = end_time_converted - start_time
+        xp = calc_xp(member, total_time)
+
+        c.execute('''
+            UPDATE study
+            SET end_time = ?,
+                total_time = ?,
+                xp = ?
+            WHERE id = ?
+        ''', (end_time, int(total_time.total_seconds()), xp, study[0]))
+
+        c.execute('''
+            UPDATE user
+            SET xp = ?
+            WHERE id = ?
+        ''', (user[3] + xp, user[0]))
+
+        conn.commit()
+
+    conn.close()
+
+
+@BOT.tree.command(description='Mostra as estatísticas de xp do user.')
+@app_commands.describe(
+    offset="O período de tempo para o gráfico.",
+    member_user="Usuário que deseja visualizar as estatísticas."
+)
+@app_commands.choices(offset=[
+    app_commands.Choice(name='Dia', value='day'),
+    app_commands.Choice(name='Semana', value='week'),
+    app_commands.Choice(name='Mês', value='month'),
+    app_commands.Choice(name='Ano', value='year'),
+])
+async def xp(
+        interact: discord.Interaction,
+        offset: app_commands.Choice[str],
+        member_user: discord.Member
+):
+    member: discord.Member = interact.user
+
+    user = db.get_user(member_user)
+    buffer = criar_grafico(member, user, offset.value)
+    embed, file = criar_embed(member, member_user, buffer, user, offset.value)
+
+    await interact.response.send_message(
+        member.mention, embed=embed, file=file
+    )
+
+
+@BOT.tree.command(description='Mostra o rank de xp.')
+@app_commands.describe(
+    member="Mostra a posição do usuário no rank."
+)
+async def rank(interact: discord.Interaction, member: discord.Member):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
 
     users_rank = '''
         WITH RankedUsers AS (
@@ -96,7 +144,7 @@ async def rank(ctx):
 
     rank_users_embed = []
     for user in users_position:
-        user_discord = ctx.guild.get_member(user[1])
+        user_discord = interact.guild.get_member(user[1])
         user_mention = user[1]
 
         if user_discord is not None:
@@ -106,7 +154,7 @@ async def rank(ctx):
             f'#{user[3]} | {user_mention} - XP: `{int(user[2])}`'
         )
 
-    user_rank_discord = ctx.guild.get_member(user_position[1])
+    user_rank_discord = interact.guild.get_member(user_position[1])
     message = (
         f'**#{user_position[3]} | {user_rank_discord.mention} '
         f'- XP: `{int(user[2])}`**'
@@ -124,7 +172,29 @@ async def rank(ctx):
     )
 
     c.close()
-    await channel.send(member.mention, embed=embed)
+    await interact.response.send_message(member.mention, embed=embed)
+
+
+def time_now():
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def convert_time(time):
+    return datetime.strptime(time, '%Y-%m-%d %H:%M:%S')
+
+
+def calc_xp(member, total_time):
+    xp_point = int(config('XP_POINT', 1))
+    xp_per_min = int(total_time.total_seconds() / 60)
+
+    if member.premium_since is not None:
+        xp_point = xp_point * 1.5
+
+    xp = 0
+    if xp_per_min > 0:
+        xp = xp_per_min * xp_point
+
+    return xp
 
 
 def total_horas_embed(user):
@@ -277,8 +347,7 @@ def dados_grafico(user, days=6):
             valores.append(0)
             continue
 
-        # TODO: Mudar para horas
-        valor = int(total_time_sum)
+        valor = int(total_time_sum / 3600)
         valores.append(valor)
 
     conn.close()
@@ -307,8 +376,7 @@ def dados_grafico_year(user, months=11):
             valores.append(0)
             continue
 
-        # TODO: Mudar para horas
-        valor = int(total_time_sum)
+        valor = int(total_time_sum / 3600)
         valores.append(valor)
 
     conn.close()
@@ -342,61 +410,5 @@ def criar_grafico(member, user, offset='week'):
     plt.clf()
     return buffer
 
-
-@ BOT.event
-async def on_voice_state_update(member, before, after):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    guild = BOT.get_guild(GUILD_ID)
-
-    if before.channel is None and after.channel is not None:
-        user = db.get_user(member)
-
-        if not user:
-            user = c.execute('''
-                INSERT INTO user (discord_id, guild_id, xp)
-                VALUES (?, ?, ?)
-            ''', (member.id, guild.id, 0))
-
-            conn.commit()
-            user = db.get_user(member)
-
-        c.execute('''
-            INSERT INTO study (
-                user,
-                start_time,
-                channel_id
-            ) VALUES (?, ?, ?)
-        ''', (user[0], time_now(), after.channel.id))
-        conn.commit()
-
-    elif before.channel is not None and after.channel is None:
-        user = db.get_user(member)
-        study = db.get_study_by_user(user[0])
-
-        start_time = convert_time(study[2])
-        end_time = time_now()
-        end_time_converted = convert_time(time_now())
-        total_time = end_time_converted - start_time
-        xp = calc_xp(member, total_time)
-
-        c.execute('''
-            UPDATE study
-            SET end_time = ?,
-                total_time = ?,
-                xp = ?
-            WHERE id = ?
-        ''', (end_time, int(total_time.total_seconds()), xp, study[0]))
-
-        c.execute('''
-            UPDATE user
-            SET xp = ?
-            WHERE id = ?
-        ''', (user[3] + xp, user[0]))
-
-        conn.commit()
-
-    conn.close()
 
 BOT.run(TOKEN)
