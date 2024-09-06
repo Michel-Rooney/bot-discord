@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import db
 import discord
 import matplotlib.pyplot as plt
+from dateutil.relativedelta import relativedelta
 from decouple import config
 from discord.ext import commands
 
@@ -47,27 +48,55 @@ def calc_xp(total_time):
 
 
 @BOT.command(name='xp')
-async def xp(ctx):
+async def xp(ctx, user=None, offset='week'):
     member = ctx.author
     channel = ctx.channel
 
-    user = db.get_user(member)
-    buffer = criar_grafico(member, user)
-    embed, file = criar_embed(member, buffer, user)
+    if user is isinstance(user, str):
+        user = int(user.replace('<', '').replace('>', '').replace('@', ''))
+    elif user is None:
+        user = member.id
+    else:
+        user = int(user)
+
+    member_user = ctx.guild.get_member(user)
+    user = db.get_user(member_user)
+    buffer = criar_grafico(member, user, offset)
+    embed, file = criar_embed(member, member_user, buffer, user, offset)
 
     await channel.send(member.mention, embed=embed, file=file)
 
 
-@BOT.command(name='xp week')
-async def xp(ctx):
+@BOT.command(name='rank')
+async def rank(ctx):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
     member = ctx.author
-    channel = ctx.channel
-
     user = db.get_user(member)
-    buffer = criar_grafico(member, user)
-    embed, file = criar_embed(member, buffer, user)
 
-    await channel.send(member.mention, embed=embed, file=file)
+    query = '''
+        WITH ranked_users AS (
+            SELECT
+                id,
+                xp,
+                RANK() OVER (ORDER BY xp ASC) AS rank_position
+            FROM
+                user
+        )
+        SELECT
+            id,
+            xp,
+            rank_position
+        FROM
+            ranked_users
+        WHERE
+            id = ?
+    '''
+
+    rank = c.execute(query, (user[0],)).fetchone()
+
+    c.close()
 
 
 def total_horas_embed(user):
@@ -118,17 +147,27 @@ def canal_mais_usa(user):
     return canal, horas, minutos
 
 
-def criar_embed(member, buffer, user):
+def criar_embed(member, member_user, buffer, user, offset='week'):
     horas, minutos = total_horas_embed(user)
     canal, canal_horas, canal_minutos = canal_mais_usa(user)
     canal_tempo = f'**{canal_horas}h {canal_minutos}min**'
 
+    match offset:
+        case 'day':
+            title_day = 'do dia'
+        case 'week':
+            title_day = 'semanal'
+        case 'month':
+            title_day = 'mensal'
+        case 'year':
+            title_day = 'anual'
+
     embed = discord.Embed(
-        title=f'Estatísticas semanal de {member.name}',
+        title=f'Estatísticas {title_day} de {member_user.name}',
     )
 
     embed.add_field(
-        name=f'{member.name}, você tem',
+        name=f'{member_user.name}, você tem',
         value=f'{int(user[3])} xp 😎',
         inline=True
     )
@@ -154,7 +193,7 @@ def criar_embed(member, buffer, user):
     return embed, file
 
 
-def criar_grafico(member, user, days=6):
+def dados_grafico(user, days=6):
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
@@ -176,37 +215,69 @@ def criar_grafico(member, user, days=6):
             valores.append(0)
             continue
 
-        # Mudar para horas
+        # TODO: Mudar para horas
         valor = int(total_time_sum)
         valores.append(valor)
 
-    asdf = c.execute('''
-    SELECT
-        DATE(created_at) AS dia,
-        SUM(total_time) AS total_tempo
-    FROM
-        study
-    WHERE
-        DATE(created_at) >= DATE('now', '-40 days') AND
-        user = ?
-    GROUP BY
-        DATE(created_at)
-    ORDER BY
-        dia;
-    ''', (user[0],)).fetchall()
-    print(asdf)
+    conn.close()
+    return categorias, valores
+
+
+def dados_grafico_year(user, months=11):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    today = datetime.now()
+    categorias = []
+    valores = []
+
+    for i in range(months, -1, -1):
+        dia = today - relativedelta(months=i)
+        data_formatada = dia.strftime('%Y-%m')
+        categorias.append(dia.strftime('%m/%Y'))
+
+        total_time_sum = c.execute('''
+            SELECT SUM(total_time) FROM study
+            WHERE user = ? AND strftime('%Y-%m', created_at) = ?
+        ''', (user[0], data_formatada)).fetchone()[0]
+
+        if total_time_sum is None:
+            valores.append(0)
+            continue
+
+        # TODO: Mudar para horas
+        valor = int(total_time_sum)
+        valores.append(valor)
+
+    conn.close()
+    return categorias, valores
+
+
+def criar_grafico(member, user, offset='week'):
+    today = datetime.now()
+
+    match offset:
+        case 'day':
+            categorias, valores = dados_grafico(user, days=1)
+        case 'week':
+            categorias, valores = dados_grafico(user, days=6)
+        case 'month':
+            categorias, valores = dados_grafico(user, days=29)
+        case 'year':
+            categorias, valores = dados_grafico_year(user, months=11)
 
     plt.bar(categorias, valores)
     plt.xlabel('Dia')
     plt.ylabel('Horas')
     plt.title(f'Gráfico de Horas Estudadas {today.year} - {member.name}')
 
+    plt.xticks(rotation=45, fontsize=6)
+
     buffer = io.BytesIO()
     plt.savefig(buffer, format='png')
-    buffer.seek(0)
+    buffer.seek(1)
 
     plt.clf()
-    conn.close()
     return buffer
 
 
